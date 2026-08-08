@@ -1,0 +1,135 @@
+linkrobins-chirp:
+  admin:
+    key_label: Chirp channel key
+    key_help: >
+      Paste the channel key from your linkrobins.com dashboard → Chirp. That's
+      it — your forum connects to your channel's dedicated audio server
+      automatically. Leave it blank to disconnect.
+    connected: >
+      ✓ Connected — your channel is live-ready. Moderators can go live on any
+      discussion; members can take the mic up to your channel's speaker slots.
+    disconnected: >
+      Not connected yet. Paste your channel key below — get one from your
+      linkrobins.com dashboard → Chirp.
+    service_url_label: Service URL
+    service_url_help: Only change this if support asks you to.
+    appearance_label: Accent colors
+    appearance_help: >
+      Default keeps Chirp's own coral-and-teal accents. Flarum adopts your
+      forum's Appearance colors (primary and secondary color) instead, so the
+      bars blend into your site. The green "mic is live" cues stay the same
+      either way.
+    appearance_brand: Default
+    appearance_forum: Flarum
+    policy_label: Default speaker policy
+    policy_help: >
+      Who can take the mic in new live rooms. The host can change this live
+      from the room's toolbar. "Raise hand" means listeners request and the
+      host approves; "Author only" limits the stage to the discussion's
+      author (hosts and moderators can always speak).
+    policy_open: Anyone can speak
+    policy_hand: Raise hand to speak
+    policy_op: Author only
+    channels_label: Voice channels
+    channels_help: >
+      Standing voice rooms, Discord-style: designate a discussion and its
+      voice bar stays open until you remove it here. Voice channels never
+      block Go live and are never recorded.
+    channels_none: No voice channels yet.
+    channels_placeholder: Search discussions…
+    channels_add: Designate
+    channels_remove: Remove
+    channels_confirm_remove: >
+      Remove this voice channel? Everyone in it gets disconnected and the
+      discussion goes back to normal.
+    record_label: Record live rooms
+    record_help: >
+      When your channel has the recordings add-on, every room is recorded and
+      the audio lands in the discussion as a post when the room ends — stored
+      on this forum, not on our servers. This switch only takes effect when
+      the add-on is active on your channel (re-save your channel key after
+      changing the add-on so this forum notices).
+    # Permission-grid labels. These MUST live under admin: — Flarum ships
+    # locale by frontend, so a *.forum.* key renders as the raw key here.
+    permissions:
+      go_live_label: Start a live audio room
+      take_mic_label: Speak in a live audio room
+      delete_recording_label: Delete live room recordings
+
+  forum:
+    go_live: Go live
+    end_room: End
+    live_badge: LIVE
+    join_listen: Listen
+    leave: Leave
+    take_mic: Speak
+    leave_mic: Leave the stage
+    mute: Mute
+    unmute: Unmute
+    connecting: Connecting…
+    listeners: "{count, plural, one {# listening} other {# listening}}"
+    live_banner: This discussion is live right now.
+    speaker_muted: "{name} (muted)"
+    ended_toast: The room has ended.
+    confirm_end: End the room for everyone?
+    mic_denied: Your browser blocked the microphone — check the permission and try again.
+    join_channel: Join
+    in_channel: "{count, plural, one {# in the channel} other {# in the channel}}"
+    hands_heading: Hands raised
+    reconnecting: Reconnecting…
+    muted_hint: You're muted
+    schedule_live: Schedule live
+    schedule_title: Schedule a live room
+    schedule_label: When do you go live?
+    schedule_help: Followers of this discussion get a heads-up, and the discussion shows a countdown until you go live.
+    schedule_tz: "Your timezone: {zone} — everyone else sees the time in theirs."
+    schedule_submit: Schedule
+    schedule_cancel: Cancel
+    confirm_cancel_schedule: Withdraw the scheduled room? The countdown disappears for everyone.
+    live_in: "LIVE in {time}"
+    starting_soon: Starting soon…
+    voice_badge: VOICE
+    unstage: Remove from stage
+    kick: Remove from room
+    confirm_kick: Remove this person from the room entirely? They can rejoin as a listener.
+    participants: Participants
+    on_stage: "{count, plural, one {On stage — # speaker} other {On stage — # speakers}}"
+    listening_heading: "{count, plural, one {Listening — # person} other {Listening — # people}}"
+    stage_empty: Nobody on stage right now.
+    you: (you)
+    roster_gone: You left the room.
+    settings:
+      notify_room_started_label: Someone goes live in a discussion I follow
+      notify_room_scheduled_label: Someone schedules a live room in a discussion I follow
+    notifications:
+      went_live_text: "{user} went live"
+      voice_opened_text: "{user} opened a voice channel"
+      scheduled_text: "{user} scheduled a live room"
+    raise_hand: Raise hand
+    hand_pending: Hand raised…
+    hand_declined: Not this time
+    approve: Bring up
+    decline: Decline
+    policy_open_short: Anyone
+    policy_hand_short: Raise hand
+    policy_op_short: Author only
+    recording_badge: REC
+    recording_title: This room is being recorded — the audio will be posted in the discussion.
+    recorded_badge: RECORDED
+    delete_recording: Delete recording
+    confirm_delete_recording: >
+      Delete this recording for good? Your forum holds the only copy — there
+      is no undo.
+    channel_busy_elsewhere: >
+      Your channel is already live on another discussion. End that room first —
+      or add another channel on linkrobins.com to run rooms side by side.
+    not_configured: >
+      Chirp isn't connected yet. An admin needs to paste the channel key in
+      Admin → Chirp.
+
+  lib:
+    error:
+      chirp_not_configured_message: Chirp isn't set up on this forum yet — an admin needs to paste the channel key.
+      chirp_channel_busy_message: Your channel already has a live room. End it first, or add another channel for simultaneous rooms.
+      chirp_slots_full_message: Every speaker slot is taken right now — you can keep listening, and grab the mic when someone steps down.
+      chirp_speak_denied_message: The host decides who speaks in this room — raise your hand or keep listening.
