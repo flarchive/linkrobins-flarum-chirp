@@ -1,0 +1,628 @@
+import app from 'flarum/forum/app';
+import m from 'mithril';
+// Statically imported ON PURPOSE: a dynamic import() becomes a separate
+// webpack chunk, and Flarum's asset publisher only copies the named
+// forum.js/admin.js bundles — the chunk 404s at runtime and the join
+// spinner hangs forever.
+import { Room, RoomEvent, Track } from 'livekit-client';
+
+export interface Speaker {
+  key: string;
+  name: string;
+  initial: string;
+  color: string;
+  speaking: boolean;
+  muted: boolean;
+  isLocal: boolean;
+  onStage: boolean;
+}
+
+const PALETTE = ['#1ec3d6', '#b28cf5', '#e8b339', '#34c98e', '#f06a6a', '#5a9ded', '#e87fc0'];
+
+/** Stable per-identity colour so a speaker keeps the same dot every session. */
+function colorFor(key: string): string {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+}
+
+/**
+ * Connection state for the one live room the user can be in, plus a live
+ * roster (who's on stage, who's talking, who's muted) so the bar can show
+ * the room rather than just report that one exists.
+ */
+export default class ChirpState {
+  room: any = null;
+  discussionId: number | null = null;
+
+  /** The room's server-truth recording flag (recorder bot present). */
+  recording = false;
+
+  /** Live speaker policy — data-channel truth once joined; null = use the
+   *  discussion attribute. */
+  speakPolicy: string | null = null;
+
+  /** My raise-hand state in the current room. */
+  handStatus: 'none' | 'pending' | 'approved' | 'declined' = 'none';
+
+  /** Pending hands (host view). */
+  hands: { userId: number; name: string }[] = [];
+  /** Title + path of the room you're in, so the dock can label and link it. */
+  roomTitle = '';
+  roomPath = '';
+  connecting = false;
+  canPublish = false;
+  muted = false;
+
+  /** Network blip: LiveKit is re-establishing the session. */
+  reconnecting = false;
+
+  /** Talking into a muted mic right now (sustained voice on the monitor). */
+  mutedTalking = false;
+  // ⚠️ src/analyser refs are LOAD-BEARING: an unreferenced
+  // MediaStreamAudioSourceNode gets garbage-collected and the analyser
+  // reads silence forever.
+  private mutedMonitor: { stream: MediaStream; ctx: AudioContext; src: MediaStreamAudioSourceNode; analyser: AnalyserNode } | null = null;
+  private mutedTimer: ReturnType<typeof setInterval> | null = null;
+  private mutedHot = 0;
+
+  /** True while the page is being torn down. livekit-client disconnects the
+   *  room itself on page leave ("Page leave detected"), which fires our
+   *  Disconnected → cleanup() — and cleanup must NOT clear the resume marker
+   *  in that one case, or a refresh could never restore the session. */
+  private unloading = false;
+
+  constructor() {
+    const mark = () => {
+      this.unloading = true;
+    };
+    window.addEventListener('beforeunload', mark);
+    window.addEventListener('pagehide', mark);
+    // Back-forward cache can revive the page after 'pagehide' — reset.
+    window.addEventListener('pageshow', () => {
+      this.unloading = false;
+    });
+  }
+
+  /** Identities currently talking, from LiveKit's speaker detection. */
+  private active = new Set<string>();
+  /** Who talked last — keeps the bar's featured avatar steady between turns. */
+  private lastActive: string | null = null;
+  private audioEls: HTMLMediaElement[] = [];
+
+  connected(): boolean {
+    return !!this.room;
+  }
+
+  // ── Survive full page loads ────────────────────────────────────────────────
+  // SPA navigation never drops the connection (the dock lives outside the
+  // router), but a refresh or a non-SPA link kills the whole JS context —
+  // nothing survives that. So: remember where we were (per-tab, so a new tab
+  // doesn't hijack the session) and quietly rejoin after boot. A deliberate
+  // Leave and any server-side disconnect (kick, room ended) clear the marker
+  // via cleanup(); a page unload doesn't run cleanup, which is the point.
+
+  private static readonly RESUME_KEY = 'chirp_resume';
+
+  private saveResume(): void {
+    try {
+      sessionStorage.setItem(
+        ChirpState.RESUME_KEY,
+        JSON.stringify({ id: this.discussionId, speak: this.canPublish, title: this.roomTitle, path: this.roomPath })
+      );
+    } catch {
+      // Storage unavailable — resume is best-effort sugar.
+    }
+  }
+
+  private clearResume(): void {
+    try {
+      sessionStorage.removeItem(ChirpState.RESUME_KEY);
+    } catch {}
+  }
+
+  /** Rejoin the room this tab was in before a reload, if any. Silent: a room
+   *  that ended while we were gone just clears the marker. */
+  async resume(): Promise<void> {
+    let marker: any = null;
+    try {
+      marker = JSON.parse(sessionStorage.getItem(ChirpState.RESUME_KEY) || 'null');
+    } catch {}
+    if (!marker?.id || this.connected()) return;
+
+    this.describe(String(marker.title || ''), String(marker.path || ''));
+    try {
+      await this.join(Number(marker.id), !!marker.speak, { silent: true });
+    } catch {
+      if (marker.speak) {
+        // The mic may no longer be ours (policy changed, slots filled) —
+        // the listen seat is still worth restoring.
+        try {
+          await this.join(Number(marker.id), false, { silent: true });
+          return;
+        } catch {}
+      }
+      this.clearResume();
+    }
+  }
+
+  inDiscussion(id: number): boolean {
+    return this.connected() && this.discussionId === id;
+  }
+
+  /** Is anyone talking right now? Drives the waveform's energy. */
+  get anyoneSpeaking(): boolean {
+    return this.active.size > 0;
+  }
+
+  /** The whole room: stage first, then the audience. Hidden participants
+   *  (the recorder bot) never appear in the client roster at all. */
+  roster(): Speaker[] {
+    if (!this.room) return [];
+
+    const out: Speaker[] = [];
+    const add = (p: any, isLocal: boolean) => {
+      const onStage = isLocal ? this.canPublish : !!(p.permissions?.canPublish ?? (p.audioTrackPublications?.size ?? 0) > 0);
+      const key = String(p.identity ?? (isLocal ? 'me' : Math.random()));
+      const name = String(p.name || p.identity || 'Speaker');
+      const micOff = isLocal ? this.muted : ![...(p.audioTrackPublications?.values?.() ?? [])].some((pub: any) => !pub.isMuted);
+
+      out.push({
+        key,
+        name,
+        initial: (name.replace(/^[ug]\d+$/i, 'S').trim()[0] || 'S').toUpperCase(),
+        color: colorFor(key),
+        speaking: this.active.has(key),
+        muted: onStage ? micOff : true,
+        isLocal,
+        onStage,
+      });
+    };
+
+    if (this.room.localParticipant) add(this.room.localParticipant, true);
+    for (const p of this.room.remoteParticipants?.values?.() ?? []) add(p, false);
+
+    return out.sort((a, b) => Number(b.onStage) - Number(a.onStage));
+  }
+
+  /** Everyone who can publish audio — the stage. */
+  speakers(): Speaker[] {
+    return this.roster().filter((p) => p.onStage);
+  }
+
+  /** The one avatar the bar shows: whoever is talking, else whoever talked
+   *  last, else yourself if you're on stage, else the first speaker. */
+  featuredSpeaker(): Speaker | null {
+    const s = this.speakers();
+    if (!s.length) return null;
+    return s.find((p) => p.speaking) || s.find((p) => p.key === this.lastActive) || s.find((p) => p.isLocal) || s[0];
+  }
+
+  /** Everyone else in the room — the audience (including yourself if listening).
+   *  Counted off the roster, not room.numParticipants, whose local-participant
+   *  semantics differ between client versions (it was over-counting by one). */
+  listenerCount(): number {
+    if (!this.room) return 0;
+    const total = (this.room.remoteParticipants?.size ?? 0) + 1; // remotes + me
+    return Math.max(0, total - this.speakers().length);
+  }
+
+  /** Remember where the current room lives (called by whoever initiates a join). */
+  describe(title: string, path: string): void {
+    this.roomTitle = title;
+    this.roomPath = path;
+  }
+
+  async join(discussionId: number, speak: boolean, opts: { silent?: boolean } = {}): Promise<void> {
+    if (this.connecting) return;
+    this.connecting = true;
+    m.redraw();
+
+    try {
+      const res = await app.request<any>({
+        method: 'POST',
+        url: `${app.forum.attribute('apiUrl')}/chirp/rooms/${discussionId}/token`,
+        body: { speak },
+        // Resume must not toast "something went wrong" over a room that
+        // simply ended while the page was reloading.
+        errorHandler: opts.silent ? () => {} : undefined,
+      });
+
+      await this.connect(discussionId, res.endpoint, res.token, !!res.canPublish);
+    } finally {
+      this.connecting = false;
+      m.redraw();
+    }
+  }
+
+  async connect(discussionId: number, endpoint: string, token: string, canPublish: boolean): Promise<void> {
+    await this.leave();
+
+    const room = new Room();
+    const touch = () => m.redraw();
+
+    room
+      .on(RoomEvent.TrackSubscribed, (track: any) => {
+        if (track.kind === Track.Kind.Audio) {
+          const el = track.attach();
+          el.style.display = 'none';
+          document.body.appendChild(el);
+          this.audioEls.push(el);
+        }
+        touch();
+      })
+      .on(RoomEvent.ActiveSpeakersChanged, (speakers: any[]) => {
+        this.active = new Set(speakers.map((p) => String(p.identity)));
+        if (speakers.length) this.lastActive = String(speakers[0].identity);
+        touch();
+      })
+      .on(RoomEvent.ParticipantConnected, () => {
+        this.cue('join');
+        touch();
+      })
+      .on(RoomEvent.ParticipantDisconnected, () => {
+        this.cue('leave');
+        touch();
+      })
+      .on(RoomEvent.TrackMuted, touch)
+      .on(RoomEvent.TrackUnmuted, touch)
+      .on(RoomEvent.TrackPublished, touch)
+      .on(RoomEvent.TrackUnpublished, touch)
+      // Driven by the recorder bot joining/leaving (its `recorder` grant
+      // flips the room's ActiveRecording flag server-side) — the REC badge
+      // is live truth, not a local guess.
+      // Server-side stage moderation (host revoked our publish grant):
+      // livekit unpublishes the mic; reflect it in the UI immediately.
+      .on(RoomEvent.ParticipantPermissionsChanged, (_prev: any, participant: any) => {
+        if (participant === this.room?.localParticipant && participant.permissions?.canPublish === false && this.canPublish) {
+          this.canPublish = false;
+          this.muted = false;
+          if (this.handStatus === 'approved') this.handStatus = 'declined';
+          // A reload must not try to reclaim the mic moderation took away.
+          this.saveResume();
+        }
+        touch();
+      })
+      // Browsers block audio after a load without a gesture (the auto-rejoin
+      // path) — resume playback on the first tap/click anywhere.
+      .on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        this.ensureAudioPlayback();
+        touch();
+      })
+      .on(RoomEvent.RecordingStatusChanged, (rec: boolean) => {
+        this.recording = rec;
+        touch();
+      })
+      .on(RoomEvent.DataReceived, (payload: Uint8Array) => this.onData(payload))
+      // Wi-Fi blip / server hiccup: say so instead of letting the room just
+      // go quiet. SignalReconnecting is the EARLY signal (fires while
+      // Reconnecting may not, e.g. a media-server restart) — treat any
+      // non-connected transition as "reconnecting" and let the state-change
+      // event clear it when the session is back.
+      .on(RoomEvent.SignalReconnecting, () => {
+        this.reconnecting = true;
+        touch();
+      })
+      .on(RoomEvent.Reconnecting, () => {
+        this.reconnecting = true;
+        touch();
+      })
+      .on(RoomEvent.Reconnected, () => {
+        this.reconnecting = false;
+        touch();
+      })
+      .on(RoomEvent.ConnectionStateChanged, (s: string) => {
+        this.reconnecting = s === 'reconnecting' || s === 'signalReconnecting';
+        touch();
+      })
+      .on(RoomEvent.Disconnected, () => {
+        this.cleanup();
+        m.redraw();
+      });
+
+    await room.connect(endpoint, token);
+    this.recording = !!room.isRecording;
+
+    this.room = room;
+    this.discussionId = discussionId;
+    this.canPublish = canPublish;
+    this.muted = false;
+    this.saveResume();
+    this.ensureAudioPlayback();
+    m.redraw();
+
+    if (canPublish) {
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      } catch {
+        app.alerts.show({ type: 'error' }, app.translator.trans('linkrobins-chirp.forum.mic_denied'));
+        this.canPublish = false;
+      }
+      m.redraw();
+    }
+  }
+
+  async setMuted(muted: boolean): Promise<void> {
+    if (!this.room || !this.canPublish) return;
+    await this.room.localParticipant.setMicrophoneEnabled(!muted);
+    this.muted = muted;
+    if (muted) void this.startMutedMonitor();
+    else this.stopMutedMonitor();
+    m.redraw();
+  }
+
+  /**
+   * The classic live-audio failure: talking into a muted mic. Muting
+   * DISABLES the underlying MediaStreamTrack, so analysing the LiveKit track
+   * only ever hears silence — instead, while muted, open an independent
+   * monitor stream (permission was already granted for the mic) and watch
+   * its RMS level; sustained voice shows "You're muted". The monitor closes
+   * the moment you unmute or leave. Entirely best-effort.
+   */
+  private async startMutedMonitor(): Promise<void> {
+    this.stopMutedMonitor();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!this.muted || !this.room) {
+        // Unmuted (or gone) while we were asking — never keep a stray mic.
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      const ctx = new AudioContext();
+      void ctx.resume?.();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      const src = ctx.createMediaStreamSource(stream);
+      src.connect(analyser);
+      const buf = new Float32Array(analyser.fftSize);
+      this.mutedMonitor = { stream, ctx, src, analyser };
+
+      this.mutedTimer = setInterval(() => {
+        analyser.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        const loud = Math.sqrt(sum / buf.length) > 0.015;
+        this.mutedHot = loud ? this.mutedHot + 1 : 0;
+        const show = this.mutedHot >= 4; // ~1.2s of sustained voice
+        if (show !== this.mutedTalking) {
+          this.mutedTalking = show;
+          m.redraw();
+        }
+      }, 300);
+    } catch {
+      // Permission/API unavailable: no monitor, no hint.
+    }
+  }
+
+  private stopMutedMonitor(): void {
+    if (this.mutedTimer) {
+      clearInterval(this.mutedTimer);
+      this.mutedTimer = null;
+    }
+    this.mutedMonitor?.stream.getTracks().forEach((t) => t.stop());
+    void this.mutedMonitor?.ctx.close().catch(() => {});
+    this.mutedMonitor = null;
+    this.mutedHot = 0;
+    if (this.mutedTalking) {
+      this.mutedTalking = false;
+      m.redraw();
+    }
+  }
+
+  async leave(): Promise<void> {
+    if (this.room) {
+      const room = this.room;
+      this.cleanup();
+      try {
+        await room.disconnect();
+      } catch {
+        // already gone
+      }
+    }
+  }
+
+  // ── Sound cues ────────────────────────────────────────────────────────────
+  // Discord texture: a soft blip when someone joins/leaves the room you're
+  // in, a two-note ping for the host when a hand goes up. Tones are
+  // generated (no assets) and QUIET; everything is fail-soft.
+
+  private cueCtx: AudioContext | null = null;
+
+  private cue(kind: 'join' | 'leave' | 'hand'): void {
+    try {
+      if (!this.room) return;
+      this.cueCtx = this.cueCtx || new AudioContext();
+      const ctx = this.cueCtx;
+      if (ctx.state === 'suspended') return; // no gesture yet — skip, never queue
+
+      const note = (freq: number, at: number, dur = 0.09, vol = 0.055) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, ctx.currentTime + at);
+        gain.gain.linearRampToValueAtTime(vol, ctx.currentTime + at + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(ctx.currentTime + at);
+        osc.stop(ctx.currentTime + at + dur + 0.05);
+      };
+
+      if (kind === 'join') note(740, 0);
+      else if (kind === 'leave') note(494, 0);
+      else {
+        note(880, 0, 0.08);
+        note(1175, 0.11, 0.12);
+      }
+    } catch {
+      // Cues are sugar.
+    }
+  }
+
+  private ensureAudioPlayback(): void {
+    const room = this.room;
+    if (!room || room.canPlaybackAudio !== false) return;
+    const resume = () => {
+      document.removeEventListener('pointerdown', resume);
+      this.room?.startAudio?.().catch(() => {});
+    };
+    document.addEventListener('pointerdown', resume);
+  }
+
+  private cleanup(): void {
+    if (!this.unloading) this.clearResume();
+    this.stopMutedMonitor();
+    void this.cueCtx?.close().catch(() => {});
+    this.cueCtx = null;
+    this.reconnecting = false;
+    this.audioEls.forEach((el) => el.remove());
+    this.audioEls = [];
+    this.active = new Set();
+    this.lastActive = null;
+    this.room = null;
+    this.discussionId = null;
+    this.roomTitle = '';
+    this.roomPath = '';
+    this.canPublish = false;
+    this.muted = false;
+    this.recording = false;
+    this.speakPolicy = null;
+    this.handStatus = 'none';
+    this.hands = [];
+  }
+
+  // ── Speaker policies ───────────────────────────────────────────────────────
+  // REST is the enforcement (the token endpoint checks rows); the data
+  // channel only makes the other clients' UI instant.
+
+  private api(): string {
+    return String(app.forum.attribute('apiUrl'));
+  }
+
+  private myUserId(): number {
+    return Number(app.session.user?.id() || 0);
+  }
+
+  private send(msg: Record<string, unknown>): void {
+    try {
+      this.room?.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(msg)), { reliable: true });
+    } catch {
+      // UX sugar only — REST already landed.
+    }
+  }
+
+  private onData(payload: Uint8Array): void {
+    let msg: any;
+    try {
+      msg = JSON.parse(new TextDecoder().decode(payload));
+    } catch {
+      return;
+    }
+
+    switch (msg.t) {
+      // Live thread while the room is on: someone in the room posted to the
+      // room's discussion — if we're looking at it, pull the new post(s) in.
+      // This rides the room's own data channel, so it needs NO realtime
+      // extension; with one installed the double update is harmless (the
+      // stream refresh is idempotent).
+      case 'post': {
+        const current: any = (app as any).current;
+        const disc = current?.get?.('discussion');
+        if (disc && Number(disc.id()) === this.discussionId) {
+          // Re-fetch the discussion FIRST: stream.update() sizes its load
+          // against the local commentCount, which doesn't know about the
+          // post yet — updating against the stale count loads nothing.
+          (app.store.find('discussions', String(this.discussionId)) as Promise<any>)
+            .then(() => current.get('stream')?.update?.())
+            .then(() => m.redraw())
+            .catch(() => {});
+        }
+        break;
+      }
+      case 'hand':
+        if (!this.hands.some((h) => h.userId === Number(msg.user))) {
+          this.hands.push({ userId: Number(msg.user), name: String(msg.name || '?') });
+          // Only whoever can act on the queue gets the ping.
+          if (app.store.getById('discussions', String(this.discussionId))?.attribute?.('canChirpStart')) {
+            this.cue('hand');
+          }
+        }
+        break;
+      case 'hand-ok':
+        this.hands = this.hands.filter((h) => h.userId !== Number(msg.user));
+        if (Number(msg.user) === this.myUserId() && this.handStatus !== 'approved') {
+          this.handStatus = 'approved';
+          // The mic was just unlocked for us — take it (same path as the
+          // Speak button; reconnects with a publish token).
+          if (this.discussionId && !this.canPublish) void this.join(this.discussionId, true);
+        }
+        break;
+      case 'hand-no':
+        this.hands = this.hands.filter((h) => h.userId !== Number(msg.user));
+        if (Number(msg.user) === this.myUserId()) this.handStatus = 'declined';
+        break;
+      case 'policy':
+        this.speakPolicy = String(msg.v);
+        if (this.discussionId) {
+          app.store.getById('discussions', String(this.discussionId))?.pushAttributes({ chirpSpeakPolicy: this.speakPolicy });
+        }
+        break;
+      default:
+        return;
+    }
+    m.redraw();
+  }
+
+  /** Called when this client created a post — tell the room so everyone at
+   *  the session sees the thread move without any realtime extension. */
+  notifyPost(discussionId: number): void {
+    if (this.inDiscussion(discussionId)) this.send({ t: 'post' });
+  }
+
+  async raiseHand(discussionId: number): Promise<void> {
+    await app.request({ method: 'POST', url: `${this.api()}/chirp/rooms/${discussionId}/hand` });
+    this.handStatus = 'pending';
+    this.send({ t: 'hand', user: this.myUserId(), name: app.session.user?.displayName() });
+    m.redraw();
+  }
+
+  async resolveHand(discussionId: number, userId: number, approve: boolean): Promise<void> {
+    await app.request({
+      method: 'POST',
+      url: `${this.api()}/chirp/rooms/${discussionId}/hand/${userId}`,
+      body: { action: approve ? 'approve' : 'decline' },
+    });
+    this.hands = this.hands.filter((h) => h.userId !== userId);
+    this.send({ t: approve ? 'hand-ok' : 'hand-no', user: userId });
+    m.redraw();
+  }
+
+  async setPolicy(discussionId: number, policy: string): Promise<void> {
+    await app.request({ method: 'POST', url: `${this.api()}/chirp/rooms/${discussionId}/policy`, body: { policy } });
+    this.speakPolicy = policy;
+    app.store.getById('discussions', String(discussionId))?.pushAttributes({ chirpSpeakPolicy: policy });
+    this.send({ t: 'policy', v: policy });
+    m.redraw();
+  }
+
+  /** Host moderation: 'unstage' revokes their mic, 'mute' soft-mutes their
+   *  tracks server-side (voice channels), 'kick' removes them. */
+  async moderate(discussionId: number, identity: string, action: 'unstage' | 'kick' | 'mute'): Promise<void> {
+    await app.request({
+      method: 'POST',
+      url: `${this.api()}/chirp/rooms/${discussionId}/stage`,
+      body: { identity, action },
+    });
+    m.redraw();
+  }
+
+  async loadHands(discussionId: number): Promise<void> {
+    try {
+      const res = await app.request<any>({ url: `${this.api()}/chirp/rooms/${discussionId}/hands` });
+      this.hands = res?.hands || [];
+      m.redraw();
+    } catch {
+      // Host UI just starts empty; data messages fill it in.
+    }
+  }
+}

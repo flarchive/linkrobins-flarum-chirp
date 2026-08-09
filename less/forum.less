@@ -1,0 +1,800 @@
+// Chirp — the live-room bar. Sized with the FontSizer contract vars so
+// text-resize controls compose (no-ops when none installed).
+
+// Accent roles, overridable per forum. Brand (the default) is Chirp's own
+// palette. "Match forum theme" (html.chirp-blend, driven by the admin
+// appearance setting) adopts the forum's Appearance colors instead: the
+// hot/live accent takes primary, the frame takes secondary, and text on hot
+// surfaces takes Flarum's YIQ-computed on-primary color so a light primary
+// stays readable. The green stays fixed in both modes — it means "mic is
+// hot / you're in", a status, not a brand. fade()/darken() only work on
+// compile-time literals, so translucent accents go through color-mix().
+.ChirpBadge,
+.ChirpBar,
+.ChirpChip,
+.ChirpDock {
+  --chirp-hot: #e8442e;
+  --chirp-cool: #1ec3d6;
+  --chirp-on-hot: #fff;
+}
+
+html.chirp-blend {
+  .ChirpBadge,
+  .ChirpBar,
+  .ChirpChip,
+  .ChirpDock {
+    --chirp-hot: var(--primary-color);
+    --chirp-cool: var(--secondary-color);
+    --chirp-on-hot: var(--button-primary-color, #fff);
+  }
+}
+
+.ChirpBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--chirp-hot);
+  color: var(--chirp-on-hot);
+  font-size: calc(10px * var(--lr-ui-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  line-height: 1.5;
+  flex-shrink: 0;
+
+  &::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--chirp-on-hot);
+    animation: chirp-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes chirp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+// REC: outline twin of the LIVE badge — present while the recorder bot is in
+// the room (server truth via ActiveRecording, not a local guess).
+.ChirpBadge--rec {
+  background: transparent;
+  border: 1px solid var(--chirp-hot);
+  color: var(--chirp-hot);
+
+  &::before {
+    background: var(--chirp-hot);
+  }
+}
+
+// ── The recording bar: the live bar's afterlife, same spot, same frame ─────
+// A ChirpBar variant, so it inherits the accent frame, blend mode, and the
+// list-row static positioning of --inline for free. Static in flow: nothing
+// to reach for, so no sticky/dock.
+// The recording bar inherits the live bar's positioning wholesale — sticky
+// on desktop, bottom-docked on phones, composer-aware (Karl: persistence IS
+// the mechanism). Only the interaction affordances differ.
+.ChirpBar--recording {
+  cursor: auto;
+}
+
+// A recorded artifact doesn't pulse.
+.ChirpBadge--still::before {
+  animation: none;
+}
+
+.ChirpRecordingBar-meta {
+  white-space: nowrap;
+}
+
+.ChirpRecordingBar-player {
+  display: block;
+  flex: 1 1 240px;
+  min-width: 0;
+  height: 36px;
+}
+
+// The recording picker must READ as a control: iOS renders bare selects as
+// plain text with zero affordance, so appearance goes off and the pill +
+// chevron are ours.
+.ChirpRecordingBar-pickwrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+
+  &::after {
+    content: '▾';
+    position: absolute;
+    right: 11px;
+    pointer-events: none;
+    color: var(--chirp-cool);
+    font-size: calc(11px * var(--lr-ui-scale, 1));
+    line-height: 1;
+  }
+}
+
+.ChirpRecordingBar-pick {
+  appearance: none;
+  -webkit-appearance: none;
+  width: auto;
+  max-width: 190px;
+  height: 32px;
+  padding: 2px 28px 2px 12px;
+  font-size: calc(12px * var(--lr-ui-scale, 1));
+  font-weight: 600;
+  color: var(--body-color);
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--chirp-cool) 35%, transparent);
+  background: color-mix(in srgb, var(--chirp-cool) 10%, transparent);
+  cursor: pointer;
+
+  &:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--chirp-cool) 65%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--chirp-cool) 15%, transparent);
+  }
+}
+
+@media (max-width: 767px) {
+  // The picker gets its own full row — a full-width pill is unmistakably a
+  // button, and the tap target grows to match.
+  .ChirpRecordingBar-pickwrap {
+    flex-basis: 100%;
+  }
+
+  .ChirpRecordingBar-pick {
+    width: 100%;
+    max-width: none;
+    height: 36px;
+  }
+
+  .ChirpRecordingBar-player {
+    flex-basis: 100%;
+  }
+}
+
+.ChirpBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 12px 18px;
+  margin: 0 0 20px;
+  border-radius: 12px;
+  color: var(--body-color);
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--chirp-hot) 7%, transparent) 0%, color-mix(in srgb, var(--chirp-cool) 8%, transparent) 55%, transparent 100%),
+    var(--body-bg);
+  border: 1px solid color-mix(in srgb, var(--chirp-cool) 28%, transparent);
+  box-shadow: 0 1px 2px fade(#000, 6%);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+
+  // Rides along as you read: the room controls should never be a scroll-up
+  // away. Offsets clear Flarum's affixed header (52px, tablet-up only) and
+  // any pinned site chrome (--lr-chrome-h, 0 when there is none).
+  position: sticky;
+  top: calc(var(--lr-chrome-h, 0px) + 8px);
+  z-index: 3;
+
+  &.ChirpBar--active {
+    border-color: fade(#34c98e, 55%);
+    box-shadow: 0 0 0 3px fade(#34c98e, 10%);
+  }
+}
+
+.ChirpBar-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+// Waveform: idles as a flat pulse, comes alive while someone is talking.
+.ChirpWave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+}
+
+.ChirpWave-bar {
+  width: 3px;
+  height: 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--chirp-cool) 50%, transparent);
+  transition: background 0.3s ease, height 0.3s ease;
+}
+
+// Idle: a small static waveform silhouette (taller toward the middle) so the
+// strip still reads as "audio" when the room is quiet.
+.ChirpWave-bar:nth-child(3n) { height: 11px; }
+.ChirpWave-bar:nth-child(4n) { height: 15px; }
+.ChirpWave-bar:nth-child(5n) { height: 8px; }
+
+.ChirpBar--active .ChirpWave-bar {
+  background: #34c98e;
+  animation: chirp-wave 0.85s ease-in-out infinite alternate;
+}
+
+@keyframes chirp-wave {
+  from { height: 4px; }
+  to { height: 20px; }
+}
+
+@media (min-width: 768px) {
+  .ChirpBar {
+    top: calc(var(--lr-chrome-h, 0px) + 60px);
+  }
+}
+
+// The stage.
+.ChirpBar-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.ChirpSpeaker {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: calc(12px * var(--lr-ui-scale, 1));
+  font-weight: 700;
+  border: 2px solid transparent;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+
+  &.is-speaking {
+    border-color: #34c98e;
+    box-shadow: 0 0 0 3px fade(#34c98e, 22%);
+  }
+
+  &.is-muted {
+    opacity: 0.5;
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border-radius: 50%;
+      background: linear-gradient(
+        to bottom right,
+        transparent calc(50% - 1px),
+        fade(#000, 55%) calc(50% - 1px),
+        fade(#000, 55%) calc(50% + 1px),
+        transparent calc(50% + 1px)
+      );
+    }
+  }
+}
+
+.ChirpBar-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-color);
+  font-size: calc(13px * var(--lr-ui-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+
+  .icon {
+    font-size: calc(12px * var(--lr-ui-scale, 1));
+    opacity: 0.75;
+  }
+}
+
+.ChirpBar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+// Every control shares one background so the strip reads as a single unit;
+// colour is reserved for meaning (muted mic, ending the room).
+.ChirpBar-btn {
+  border-radius: 8px;
+
+  .icon {
+    opacity: 0.85;
+  }
+
+  &.is-muted,
+  &.is-muted .Button-label {
+    color: var(--chirp-hot);
+  }
+}
+
+.ChirpBar-end,
+.ChirpBar-end .Button-label {
+  color: var(--chirp-hot);
+}
+
+// Phones: row one is the room at a glance, row two is a full-width control
+// strip. (Right-aligning the wrapped buttons left a dead gap on the left.)
+@media (max-width: 767px) {
+  // Phones DOCK the bar to the bottom rather than sticking it to the top:
+  // Flarum sets overflow-x: hidden on <html>/<body> at these widths, which
+  // makes them scroll containers and disables position: sticky outright
+  // (overflow-x: clip degrades back to hidden when the other axis scrolls,
+  // so there is no cheap CSS escape). Bottom-docked is the native pattern for
+  // live audio anyway: thumb-reachable, and it never fights the header.
+  .ChirpBar {
+    position: fixed;
+    top: auto;
+    left: 8px;
+    right: 8px;
+    // Rides above the composer when one is docked down there
+    // (--chirp-composer-h is published by the component).
+    bottom: calc(8px + var(--chirp-composer-h, 0px));
+    z-index: 20;
+    margin: 0;
+    gap: 10px 12px;
+    padding: 12px 14px;
+    box-shadow: 0 8px 24px fade(#000, 22%);
+    transition: bottom 0.2s ease, opacity 0.15s ease;
+  }
+
+  // Reserve room so the last post never hides under the docked bar.
+  html.chirp-live .App-content,
+  html.chirp-scheduled .App-content,
+  html.chirp-recorded .App-content {
+    padding-bottom: calc(116px + var(--chirp-composer-h, 0px));
+  }
+
+  // Writing a reply takes over the screen — the room steps aside.
+  html.chirp-composer-full .ChirpBar {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .ChirpBar-count {
+    margin-left: auto;
+  }
+
+  .ChirpBar-actions {
+    margin-left: 0;
+    width: 100%;
+    gap: 8px;
+    flex-wrap: wrap;
+
+    // Whatever wraps onto a row shares that row's full width.
+    .Button {
+      flex: 1 1 0;
+      justify-content: center;
+    }
+
+    .ChirpRecordingBar-pickwrap {
+      flex: 1 1 auto;
+    }
+
+    // Crammed (4+ controls): labels go, icons carry the row.
+    > *:first-child:nth-last-child(n + 4),
+    > *:first-child:nth-last-child(n + 4) ~ * {
+      .Button-label {
+        display: none;
+      }
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ChirpBadge::before,
+  .ChirpBar--active .ChirpWave-bar {
+    animation: none;
+  }
+  .ChirpBar--active .ChirpWave-bar { height: 12px; }
+}
+
+// ── The list chip: the LIVE marker doubles as the join control ──────────────
+.ChirpChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 7px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--chirp-hot);
+  color: var(--chirp-on-hot);
+  font-size: calc(10px * var(--lr-ui-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  line-height: 1.6;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background 0.2s ease, transform 0.1s ease;
+
+  &:hover,
+  &:focus {
+    background: color-mix(in srgb, var(--chirp-hot) 85%, #000);
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+
+  &.is-listening {
+    background: #34c98e;
+  }
+
+  &.is-busy {
+    opacity: 0.7;
+    pointer-events: none;
+  }
+}
+
+.ChirpChip-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 1.5px;
+  height: 10px;
+
+  span {
+    width: 2px;
+    height: 3px;
+    border-radius: 1px;
+    background: color-mix(in srgb, var(--chirp-on-hot) 85%, transparent);
+    animation: chirp-chip-wave 0.9s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes chirp-chip-wave {
+  from { height: 3px; }
+  to { height: 9px; }
+}
+
+.ChirpChip-icon {
+  font-size: calc(9px * var(--lr-ui-scale, 1));
+  opacity: 0.9;
+}
+
+// ── The dock: keeps you listening as you browse ────────────────────────────
+.ChirpDock {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 12px;
+  color: var(--body-color);
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--chirp-hot) 7%, transparent) 0%, color-mix(in srgb, var(--chirp-cool) 8%, transparent) 55%, transparent 100%),
+    var(--body-bg);
+  border: 1px solid color-mix(in srgb, var(--chirp-cool) 28%, transparent);
+  box-shadow: 0 10px 30px fade(#000, 20%);
+  animation: chirp-dock-in 0.22s ease;
+
+  &.is-active {
+    border-color: fade(#34c98e, 55%);
+  }
+
+  &.is-active .ChirpWave-bar {
+    background: #34c98e;
+    animation: chirp-wave 0.85s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes chirp-dock-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+.ChirpDock-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ChirpDock-title {
+  font-weight: 600;
+  font-size: calc(13px * var(--lr-ui-scale, 1));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ChirpDock-count {
+  color: var(--muted-color);
+  font-weight: 700;
+  font-size: calc(12px * var(--lr-ui-scale, 1));
+}
+
+.ChirpDock-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .ChirpDock {
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + var(--chirp-composer-h, 0px));
+    max-width: none;
+    padding: 10px 12px;
+  }
+
+  // Listening to room A while viewing discussion B that has its OWN bottom-
+  // docked bar — a live/voice room (chirp-live) or a recording
+  // (chirp-recorded): both legitimately dock to the bottom, so lift the dock
+  // above the bar instead of overlapping it.
+  html.chirp-live .ChirpDock,
+  html.chirp-scheduled .ChirpDock,
+  html.chirp-recorded .ChirpDock {
+    bottom: calc(112px + var(--chirp-composer-h, 0px));
+  }
+
+  html.chirp-composer-full .ChirpDock {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+// ── The toolbar inside a discussion-list row ───────────────────────────────
+// Same component as the discussion page, minus the docking behaviour: it
+// belongs to the row, so it sits in flow beneath the title/tags/meta.
+// A block child of the row inherits the row's padding box — but Flarum pads
+// rows asymmetrically (15px left, 25px right, the extra reserved for the
+// controls button), so an untouched full-width child reads as lopsided.
+// Pull the right edge out by the difference for even gutters either side.
+// The row reserves the space under the toolbar itself — a margin on the
+// toolbar would collapse out of the row and leave its background flush
+// against the bar.
+.DiscussionListItem.has-chirp-room {
+  padding-bottom: 14px;
+}
+
+.DiscussionListItem .ChirpBar--inline {
+  position: static;
+  margin: 0 -10px 0 0;
+  padding: 8px 12px;
+  gap: 10px;
+  box-shadow: none;
+  cursor: auto;
+}
+
+@media (max-width: 767px) {
+  // Beats the phone rule that docks the bar to the viewport. Inset from the
+  // row's edges so the toolbar isn't flush against the screen sides.
+  .DiscussionListItem .ChirpBar--inline {
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+    // 15px matches the row's own edge inset (its avatar/stats sit there), so
+    // the toolbar lines up with the row content instead of hugging the screen.
+    margin: 0 15px 0 15px;
+  }
+
+  .DiscussionListItem.has-chirp-room {
+    padding-bottom: 12px;
+  }
+
+  .DiscussionListItem .ChirpBar--inline .ChirpBar-actions {
+    width: auto;
+    margin-left: auto;
+
+    .Button {
+      flex: 0 0 auto;
+    }
+  }
+}
+
+// ── Raised hands (host view): compact chips with approve/decline ───────────
+// The ⋯ button's pending-hands ping; the queue itself is in the modal.
+.ChirpBar-rosterwrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ChirpBar-rosterBadge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--chirp-hot);
+  color: var(--chirp-on-hot);
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.ChirpRoster-hand {
+  width: 30px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+// Outranks .ChirpRoster-actions' muted default without !important.
+.ChirpRoster-actions .ChirpRoster-approve .icon {
+  color: #34c98e;
+}
+
+// The host's live policy switcher shares the recording picker's pill.
+.ChirpBar-policy {
+  height: 30px;
+  max-width: 140px;
+}
+
+.ChirpRecordingBar-delete .icon {
+  color: var(--muted-color);
+  transition: color 0.15s ease;
+}
+
+.ChirpRecordingBar-delete .Button:hover .icon,
+.ChirpRecordingBar-delete .Button:focus .icon {
+  color: var(--chirp-hot);
+}
+
+// VOICE: the persistent-channel twin of the LIVE badge — cool accent, no
+// pulse (a place, not an event).
+.ChirpBadge--voice {
+  background: var(--chirp-cool);
+
+  &::before {
+    animation: none;
+  }
+}
+
+// ── The countdown bar for a scheduled room ─────────────────────────────────
+// Inherits the live bar's full positioning (sticky desktop, docked phones).
+.ChirpBar--schedule {
+  .ChirpSchedule-when {
+    color: var(--muted-color);
+    font-size: calc(13px * var(--lr-ui-scale, 1));
+    white-space: nowrap;
+  }
+}
+
+// Schedule modal: date + time side by side, each with a real native picker.
+.ChirpSchedule-inputs {
+  display: flex;
+  gap: 8px;
+
+  input[type='date'] {
+    flex: 1.4;
+  }
+
+  input[type='time'] {
+    flex: 1;
+  }
+}
+
+// Cool accent, no pulse: an announcement, not an event in progress.
+.ChirpBadge--schedule {
+  background: var(--chirp-cool);
+  white-space: nowrap;
+
+  &::before {
+    animation: none;
+  }
+}
+
+// Network blip: amber, slow pulse — "hold on", not "on air".
+.ChirpBadge--reconnecting {
+  background: #e8b339;
+  animation: chirp-reconnect-pulse 1.2s ease-in-out infinite;
+
+  &::before {
+    animation: none;
+  }
+}
+
+@keyframes chirp-reconnect-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+// Talking into a muted mic.
+.ChirpMutedHint {
+  color: var(--chirp-hot);
+  font-size: calc(12px * var(--lr-ui-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+  animation: chirp-reconnect-pulse 1s ease-in-out infinite;
+}
+
+// ── Participants modal (the bar's ⋯ button) ─────────────────────────────────
+// The bar shows only whoever is talking; the full roster — and the host's
+// moderation — lives in a native modal.
+
+.ChirpBar-stage .ChirpSpeaker {
+  cursor: pointer;
+}
+
+.ChirpBar-morecount {
+  font-size: calc(12px * var(--lr-ui-scale, 1));
+  font-weight: 700;
+  color: var(--muted-color);
+}
+
+.ChirpBar-roster {
+  color: var(--muted-color);
+}
+
+.ChirpRoster-heading {
+  margin: 0 0 8px;
+  font-size: calc(12px * var(--lr-ui-scale, 1));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-color);
+
+  & + & ,
+  .ChirpRoster-list + & {
+    margin-top: 16px;
+  }
+}
+
+.ChirpRoster-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.ChirpRoster-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ChirpRoster-you {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--muted-color);
+  font-size: calc(12px * var(--lr-ui-scale, 1));
+}
+
+.ChirpRoster-muted {
+  color: var(--muted-color);
+}
+
+.ChirpRoster-empty {
+  color: var(--muted-color);
+  font-style: italic;
+  margin: 0;
+}
+
+.ChirpRoster-actions {
+  display: inline-flex;
+  gap: 2px;
+
+  .Button .icon {
+    color: var(--muted-color);
+  }
+
+  .ChirpRoster-kick .icon {
+    color: var(--chirp-hot);
+  }
+}
