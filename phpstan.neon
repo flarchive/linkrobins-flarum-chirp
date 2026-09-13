@@ -1,0 +1,28 @@
+includes:
+    - vendor/flarum/phpstan/extension.neon
+
+parameters:
+    level: 6
+    paths:
+        - extend.php
+        - src
+    excludePaths:
+        - "*.blade.php"
+
+    # Larastan falls back to Laravel's database_path() helper to find
+    # migrations, and that helper does not exist outside a Laravel app, so
+    # analysis dies with "Call to undefined function ... database_path()"
+    # once any file triggers the model-property extension. Naming the path
+    # keeps it from ever looking.
+    databaseMigrationsPath: ['migrations']
+
+    ignoreErrors:
+        # `Room::created_at` is NOT NULL in the schema, so PHPStan is right
+        # that the guard cannot be false for a row that came from a query.
+        # The guard stays anyway: it is defensive against an unsaved model
+        # reaching reap(), and more importantly the 2.x branch has this exact
+        # line. Divergence in reconciler logic between the majors is a worse
+        # trade than one ignored notice.
+        -
+            message: '#Left side of && is always true\.#'
+            path: src/RoomReconciler.php
