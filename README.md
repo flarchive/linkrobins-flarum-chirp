@@ -2,13 +2,24 @@
 
 > **Read-only archive of released versions of linkrobins/flarum-chirp.** Not for installation: use [Packagist](https://packagist.org/packages/linkrobins/flarum-chirp) or the [upstream repository](https://github.com/linkrobins/chirp).
 
-**0** versions archived · Latest: [`v2.0.3`](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v2.0.3) · License: `MIT` · Flarum: `^2.0`
+**15** versions archived · Latest: [`v2.0.3`](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v2.0.3) · License: `MIT` · Flarum: `^2.0`
 
 ## Archived Versions
 
 | Version | Released | Flarum | Source |
 |---|---|---|---|
-| — | — | — | — |
+| `v1.0.1` | 2026-08-08 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.0.1) |
+| `v1.1.0` | 2026-08-08 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.0) |
+| `v1.1.1.1` | 2026-09-13 | `^1.8` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.1.1) |
+| `v1.1.2` | 2026-08-08 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.2) |
+| `v1.1.3` | 2026-08-08 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.3) |
+| `v1.1.4` | 2026-08-09 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.4) |
+| `v1.1.5` | 2026-08-09 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.5) |
+| `v1.1.6` | 2026-08-09 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.6) |
+| `v1.1.7` | 2026-08-12 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.7) |
+| `v1.1.8` | 2026-08-14 | `^2.0` | [Browse](https://github.com/flarchive/linkrobins-flarum-chirp/tree/archive/v1.1.8) |
+
+[View all 15 versions](https://github.com/flarchive/linkrobins-flarum-chirp/tags)
 
 Catalog entry: [packages/linkrobins-flarum-chirp.json](https://github.com/flarchive/archive-index/blob/main/packages/linkrobins-flarum-chirp.json)
 
